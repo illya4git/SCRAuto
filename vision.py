@@ -78,27 +78,103 @@ class VisionExtractor:
         return curr_speed, limit_speed, thresh_c, thresh_l
 
     def extract_dial_speed(self, dial_img):
-        bgr = cv2.cvtColor(dial_img, cv2.COLOR_BGRA2BGR)
+        h, w = dial_img.shape[:2]
+        center = (w // 2, h // 2)
+
+        # --- NEW: "Donut" (Annulus) Mask ---
+        # We only want to look at the specific ring where the indicator travels.
+        # Based on your 464x464 ROI, these radii limit the search area to the outer edge.
+        # You may need to tweak the 'inner_radius' slightly if the indicator gets cut off.
+        outer_radius = (min(w, h) // 2) - 10
+        inner_radius = (min(w, h) // 2) - 80
+
+        donut_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.circle(donut_mask, center, outer_radius, 255, -1)  # Draw the full circle
+        cv2.circle(donut_mask, center, inner_radius, 0, -1)  # Cut out the middle
+
+        # Apply the donut mask
+        masked_img = cv2.bitwise_and(dial_img, dial_img, mask=donut_mask)
+        # -----------------------------------
+
+        bgr = cv2.cvtColor(masked_img, cv2.COLOR_BGRA2BGR)
         hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
 
-        lower_green = np.array(config.GREEN_LOWER)
-        upper_green = np.array(config.GREEN_UPPER)
-        mask = cv2.inRange(hsv, lower_green, upper_green)
+        mask = cv2.inRange(hsv, np.array(config.GREEN_LOWER), np.array(config.GREEN_UPPER))
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         target_speed = None
         if contours:
-            c = max(contours, key=cv2.contourArea)
-            if cv2.contourArea(c) > 10:
+            # Filter out tiny noise artifacts that might still slip through
+            valid_contours = [c for c in contours if cv2.contourArea(c) > 15]
+
+            if valid_contours:
+                # Grab the largest remaining blob
+                c = max(valid_contours, key=cv2.contourArea)
                 M = cv2.moments(c)
                 if M["m00"] != 0:
                     cX, cY = int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])
-                    dial_center_x, dial_center_y = bgr.shape[1] // 2, bgr.shape[0] // 2
 
-                    angle_deg = math.degrees(math.atan2(cY - dial_center_y, cX - dial_center_x))
+                    angle_deg = math.degrees(math.atan2(cY - center[1], cX - center[0]))
                     angle_deg = (angle_deg + 360) % 360
 
                     target_speed = int(round(np.interp(angle_deg, self.angles, self.speeds)))
 
         return target_speed
+
+    def is_aws_active(self, dial_img):
+        """Checks if the large orange/yellow AWS confirmation button is present."""
+        bgr = cv2.cvtColor(dial_img, cv2.COLOR_BGRA2BGR)
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, np.array(config.AWS_LOWER), np.array(config.AWS_UPPER))
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if contours:
+            c = max(contours, key=cv2.contourArea)
+            # The button is huge. A threshold of 5000 ensures we don't trigger on tiny yellow pixels.
+            if cv2.contourArea(c) > 5000:
+                return True
+        return False
+
+    def extract_signal_state(self, signal_img):
+        """
+        Analyzes the signal UI block and returns the current signal state:
+        'proceed', 'caution', 'preliminary_caution', 'danger', 'shunt_proceed', or 'unknown'.
+        """
+        bgr = cv2.cvtColor(signal_img, cv2.COLOR_BGRA2BGR)
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+
+        # Helper function to count valid circular blobs of a certain color
+        def count_blobs(lower, upper, min_area=30):
+            mask = cv2.inRange(hsv, np.array(lower), np.array(upper))
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # Filter out tiny noise
+            valid_contours = [c for c in contours if cv2.contourArea(c) > min_area]
+            return len(valid_contours)
+
+        # Count the lights
+        green_count = count_blobs(config.GREEN_LOWER, config.GREEN_UPPER)
+        yellow_count = count_blobs(config.YELLOW_LOWER, config.YELLOW_UPPER)
+        white_count = count_blobs(config.WHITE_LOWER, config.WHITE_UPPER)
+
+        # Red requires combining two masks because it wraps around the HSV spectrum
+        mask_red1 = cv2.inRange(hsv, np.array(config.RED_LOWER_1), np.array(config.RED_UPPER_1))
+        mask_red2 = cv2.inRange(hsv, np.array(config.RED_LOWER_2), np.array(config.RED_UPPER_2))
+        mask_red_full = cv2.bitwise_or(mask_red1, mask_red2)
+        red_contours, _ = cv2.findContours(mask_red_full, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        red_count = len([c for c in red_contours if cv2.contourArea(c) > 30])
+
+        # State Mapping Logic
+        if green_count > 0:
+            return "proceed"  # 4-aspect proceed
+        elif red_count > 0:
+            return "danger"  # Covers both 4-aspect (1 red) and Shunt (2 reds)
+        elif yellow_count == 2:
+            return "preliminary_caution"  # 4-aspect preliminary (2 yellows)
+        elif yellow_count == 1:
+            return "caution"  # 4-aspect caution (1 yellow)
+        elif white_count > 0:
+            return "shunt_proceed"  # Shunt proceed (2 whites)
+
+        return "unknown"  # Failsafe if no lights are detected
