@@ -1,4 +1,5 @@
 # vision.py
+import re
 import cv2
 import numpy as np
 import pytesseract
@@ -32,20 +33,41 @@ class VisionExtractor:
                 cv2.rectangle(img, (x, y), (x + cw, y + ch), 255, -1)
         return img
 
+    def clean_station_name(self, raw_name):
+        """Improves OCR by filtering out gibberish, symbols, and scrolling text."""
+        if not raw_name:
+            return None
+
+        # Remove common OCR artifacts, keeping only letters, numbers, spaces, and hyphens
+        cleaned = re.sub(r'[^a-zA-Z0-9\s\-]', '', raw_name).strip()
+
+        # Split by multiple spaces or newlines to filter out scrolling text
+        parts = [p.strip() for p in re.split(r'\s{2,}|\n', cleaned) if p.strip()]
+
+        if parts:
+            for part in parts:
+                if not part.isdigit():
+                    return part
+        return None
+
     def extract_panel_info(self, img_info):
         gray = cv2.cvtColor(img_info, cv2.COLOR_BGRA2GRAY)
         _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
 
         text = pytesseract.image_to_string(thresh, config='--psm 6')
 
-        next_stop = config.PATTERNS["next_stop"].search(text)
-        distance = config.PATTERNS["distance"].search(text)
-        platform = config.PATTERNS["platform"].search(text)
+        next_stop_match = config.PATTERNS["next_stop"].search(text)
+        distance_match = config.PATTERNS["distance"].search(text)
+        platform_match = config.PATTERNS["platform"].search(text)
+
+        # Apply the cleanup function directly to the extracted string
+        raw_station = next_stop_match.group(1) if next_stop_match else None
+        clean_station = self.clean_station_name(raw_station)
 
         return {
-            "next_stop": next_stop.group(1) if next_stop else None,
-            "distance": float(distance.group(1)) if distance else None,
-            "platform": platform.group(1) if platform else None
+            "next_stop": clean_station,  # Now returns the clean version globally!
+            "distance": float(distance_match.group(1)) if distance_match else None,
+            "platform": platform_match.group(1) if platform_match else None
         }, thresh
 
     def extract_speeds(self, img_speed):

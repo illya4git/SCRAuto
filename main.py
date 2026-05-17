@@ -6,13 +6,39 @@ import time
 import config
 from vision import VisionExtractor
 from controller import TrainController
+from calibration import TrainCalibrator
+from autopilot import AutopilotLogic  # <-- Import the new module
 
 
 def main():
+    print("=======================================")
+    print("      SCR Autopilot Framework          ")
+    print("=======================================")
+    print("1. Autopilot Mode (Drive automatically)")
+    print("2. Calibration Mode (Record offsets manually)")
+    print("=======================================")
+
+    mode = input("Select mode (1 or 2): ").strip()
+    train_model = input("Enter the Train Model (e.g., 'Class 357 4-car'): ").strip()
+
+    calibrator = None
+    pilot = None
+
+    if mode == '2':
+        calibrator = TrainCalibrator(train_model)
+        print(f"Calibration mode activated for {train_model}.")
+    elif mode == '1':
+        pilot = AutopilotLogic(train_model)
+        print("Autopilot mode activated.")
+    else:
+        print("Invalid selection. Defaulting to Autopilot.")
+        mode = '1'
+        pilot = AutopilotLogic(train_model)
+
     vision = VisionExtractor()
     controller = TrainController()
 
-    print("Starting SCR Autopilot in 3 seconds. Focus the game window!")
+    print("\nStarting in 3 seconds. Focus the game window!")
     time.sleep(3)
 
     try:
@@ -34,40 +60,30 @@ def main():
                 signal_distance, sig_thresh = vision.extract_signal_distance(img_signal)
                 aws_active = vision.is_aws_active(img_dial)
 
-                # 3. Execute Control Actions
+                # 3. Handle AWS universally
                 if aws_active:
                     print("AWS Alarm detected! Acknowledging...")
                     controller.acknowledge_aws()
 
-                # --- NEW: Autopilot Signal Logic ---
-                # Default to track limit if the signal is "proceed", "shunt_proceed", or "unknown"
-                signal_limit = limit_speed
+                # 4. MODE SPECIFIC LOGIC
+                if mode == '2':
+                    calibrator.update(curr_speed, panel_data)
+                    fps = 1.0 / (time.time() - start_time)
+                    print(
+                        f"FPS: {fps:.1f} | Calibrating... | Speed: {curr_speed} | Station: {panel_data.get('next_stop')}")
 
-                if signal_state == "danger":
-                    signal_limit = 0
-                elif signal_state == "caution":
-                    signal_limit = 45
-                elif signal_state == "preliminary_caution":
-                    signal_limit = 70
+                else:
+                    # --- AUTOPILOT MODE ---
+                    effective_limit, pilot_state = pilot.update(
+                        curr_speed, limit_speed, signal_state, signal_distance, panel_data
+                    )
 
-                # Determine the effective target speed
-                effective_limit = None
-                if limit_speed is not None and signal_limit is not None:
-                    # Always pick the safest (slowest) speed.
-                    # E.g., if track is 30 but signal is 70, go 30.
-                    effective_limit = min(limit_speed, signal_limit)
-                elif signal_limit is not None:
-                    effective_limit = signal_limit
-                elif limit_speed is not None:
-                    effective_limit = limit_speed
+                    # Execute Cruise Control with dynamic braking curve
+                    controller.cruise_control(dial_target_speed, effective_limit)
 
-                # Execute Cruise Control with the newly calculated effective limit
-                #controller.cruise_control(dial_target_speed, effective_limit)
-
-                # --- Debug Output ---
-                fps = 1.0 / (time.time() - start_time)
-                print(
-                    f"FPS: {fps:.1f} | Sig: {signal_state}, {signal_distance}mi | AWS: {aws_active} | Target: {dial_target_speed} | Track: {limit_speed} | Effective: {effective_limit}")
+                    fps = 1.0 / (time.time() - start_time)
+                    print(
+                        f"FPS: {fps:.1f} | State: {pilot_state} | Sig: {signal_state} | Tgt: {dial_target_speed} | Eff: {effective_limit}")
 
                 # Show debug windows
                 cv2.imshow("Signal Distance OCR", sig_thresh)
@@ -79,7 +95,7 @@ def main():
                     break
 
     except KeyboardInterrupt:
-        print("\nAutopilot stopped by user.")
+        print("\nScript stopped by user.")
     finally:
         controller.release_all()
         cv2.destroyAllWindows()
