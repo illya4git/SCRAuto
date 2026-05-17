@@ -22,7 +22,7 @@ def main():
 
                 # 1. Capture ROIs
                 img_info = np.array(sct.grab(config.ROIS["info_panel"]))
-                img_signal = np.array(sct.grab(config.ROIS["signal"]))  # NEW
+                img_signal = np.array(sct.grab(config.ROIS["signal"]))
                 img_speed = np.array(sct.grab(config.ROIS["digital_speed"]))
                 img_dial = np.array(sct.grab(config.ROIS["dial"]))
 
@@ -31,8 +31,7 @@ def main():
                 curr_speed, limit_speed, thresh_c, thresh_l = vision.extract_speeds(img_speed)
                 dial_target_speed = vision.extract_dial_speed(img_dial)
                 signal_state = vision.extract_signal_state(img_signal)
-
-                # --- NEW: AWS Check ---
+                signal_distance, sig_thresh = vision.extract_signal_distance(img_signal)
                 aws_active = vision.is_aws_active(img_dial)
 
                 # 3. Execute Control Actions
@@ -40,14 +39,38 @@ def main():
                     print("AWS Alarm detected! Acknowledging...")
                     controller.acknowledge_aws()
 
-                controller.cruise_control(dial_target_speed, limit_speed)
+                # --- NEW: Autopilot Signal Logic ---
+                # Default to track limit if the signal is "proceed", "shunt_proceed", or "unknown"
+                signal_limit = limit_speed
+
+                if signal_state == "danger":
+                    signal_limit = 0
+                elif signal_state == "caution":
+                    signal_limit = 45
+                elif signal_state == "preliminary_caution":
+                    signal_limit = 70
+
+                # Determine the effective target speed
+                effective_limit = None
+                if limit_speed is not None and signal_limit is not None:
+                    # Always pick the safest (slowest) speed.
+                    # E.g., if track is 30 but signal is 70, go 30.
+                    effective_limit = min(limit_speed, signal_limit)
+                elif signal_limit is not None:
+                    effective_limit = signal_limit
+                elif limit_speed is not None:
+                    effective_limit = limit_speed
+
+                # Execute Cruise Control with the newly calculated effective limit
+                #controller.cruise_control(dial_target_speed, effective_limit)
 
                 # --- Debug Output ---
                 fps = 1.0 / (time.time() - start_time)
                 print(
-                    f"FPS: {fps:.1f} | Sig: {signal_state} | AWS: {aws_active} | Target: {dial_target_speed} | Lim: {limit_speed}")
+                    f"FPS: {fps:.1f} | Sig: {signal_state}, {signal_distance}mi | AWS: {aws_active} | Target: {dial_target_speed} | Track: {limit_speed} | Effective: {effective_limit}")
 
-                # Show the signal box to make sure your ROI coordinates are correct
+                # Show debug windows
+                cv2.imshow("Signal Distance OCR", sig_thresh)
                 cv2.imshow("Signal ROI Debug", img_signal)
                 cv2.imshow("Info Panel Debug", info_thresh)
                 cv2.imshow("Speed Debug", np.vstack((thresh_c, thresh_l)))

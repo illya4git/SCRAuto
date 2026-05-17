@@ -178,3 +178,32 @@ class VisionExtractor:
             return "shunt_proceed"  # Shunt proceed (2 whites)
 
         return "unknown"  # Failsafe if no lights are detected
+
+    def extract_signal_distance(self, signal_img):
+        """Extracts the distance (in miles) to the next signal."""
+        h, w = signal_img.shape[:2]
+
+        # Crop to the bottom 40% of the signal UI where the text is located
+        text_img = signal_img[int(h * 0.6):h, :]
+
+        # Upscale by 3x for much better Tesseract accuracy
+        text_img = cv2.resize(text_img, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        gray = cv2.cvtColor(text_img, cv2.COLOR_BGRA2GRAY)
+
+        # The text is white on a dark background.
+        # THRESH_BINARY_INV flips this to black text on a white background.
+        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+
+        # PSM 6 assumes a uniform block of text, perfect for "SW 070 \n 0.02 mi"
+        text = pytesseract.image_to_string(thresh, config='--psm 6')
+
+        # Reuse your existing distance regex pattern
+        match = config.PATTERNS["distance"].search(text)
+
+        if match:
+            try:
+                return float(match.group(1)), thresh
+            except ValueError:
+                return None, thresh
+
+        return None, thresh
