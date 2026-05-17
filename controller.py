@@ -77,3 +77,15 @@ class TrainController:
         pydirectinput.press('q')
         # A small sleep ensures we don't spam the key too fast in the main loop
         time.sleep(0.1)
+
+    def toggle_doors(self):
+        """Presses T to open or close the train doors."""
+        pydirectinput.press('t')
+        time.sleep(0.1)
+
+    def click_screen(self, x, y):
+        """Moves the mouse to global coordinates and clicks."""
+        pydirectinput.moveTo(x, y)
+        time.sleep(0.05)  # Tiny pause to let the game register the hover state
+        pydirectinput.click()
+        time.sleep(0.1)

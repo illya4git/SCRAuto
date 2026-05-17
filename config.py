@@ -9,7 +9,9 @@ ROIS = {
     "info_panel": {"top": 1200, "left": 15, "width": 300, "height": 160},
     "signal": {"top": 1180, "left": 325, "width": 100, "height": 180},
     "digital_speed": {"top": 1200, "left": 2045, "width": 70, "height": 160},
-    "dial": {"top": 1010, "left": 2190, "width": 464, "height": 464}
+    "dial": {"top": 1010, "left": 2190, "width": 464, "height": 464},
+    "door_banner": {"top": 930, "left": 2190, "width": 464, "height": 80},
+    "center_popup": {"top": 400, "left": 700, "width": 1000, "height": 600}
 }
 
 # --- Signal & Dial Color Masks (HSV) ---
@@ -43,6 +45,14 @@ GREEN_LOWER = [40, 100, 100]
 GREEN_UPPER = [80, 255, 255]
 AWS_LOWER = [15, 150, 150]
 AWS_UPPER = [30, 255, 255]
+
+# Matches the purple background of the "Loading in progress..." UI
+PURPLE_LOWER = [125, 50, 50]
+PURPLE_UPPER = [155, 255, 255]
+
+# Matches the bright blue "Next Leg" button
+NEXT_LEG_BLUE_LOWER = [100, 150, 150]
+NEXT_LEG_BLUE_UPPER = [130, 255, 255]
 
 # Pre-compiled Regex patterns for optimization
 PATTERNS = {

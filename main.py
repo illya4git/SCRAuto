@@ -7,7 +7,7 @@ import config
 from vision import VisionExtractor
 from controller import TrainController
 from calibration import TrainCalibrator
-from autopilot import AutopilotLogic  # <-- Import the new module
+from autopilot import AutopilotLogic, AutopilotState  # <-- Import the new module
 
 
 def main():
@@ -23,6 +23,11 @@ def main():
 
     calibrator = None
     pilot = None
+
+    station_state = "DRIVING"
+    door_timer = 0
+    last_valid_speed = 0
+    terminus_timer = 0
 
     if mode == '2':
         calibrator = TrainCalibrator(train_model)
@@ -51,6 +56,8 @@ def main():
                 img_signal = np.array(sct.grab(config.ROIS["signal"]))
                 img_speed = np.array(sct.grab(config.ROIS["digital_speed"]))
                 img_dial = np.array(sct.grab(config.ROIS["dial"]))
+                img_door_banner = np.array(sct.grab(config.ROIS["door_banner"]))
+                img_popup = np.array(sct.grab(config.ROIS["center_popup"]))
 
                 # 2. Extract Data
                 panel_data, info_thresh = vision.extract_panel_info(img_info)
@@ -58,9 +65,23 @@ def main():
                 dial_target_speed = vision.extract_dial_speed(img_dial)
                 signal_state = vision.extract_signal_state(img_signal)
                 signal_distance, sig_thresh = vision.extract_signal_distance(img_signal)
+                is_loading = vision.is_loading_active(img_door_banner)
+                next_leg_pos = vision.find_next_leg_button(img_popup)
 
                 aws_active = vision.is_aws_active(img_dial)
                 spad_active = vision.is_spad_active(img_dial)
+
+                # --- NEW: Smart OCR Speed Fallback ---
+                if curr_speed is not None:
+                    last_valid_speed = curr_speed
+                else:
+                    # If we lose the number, assume we stopped if we were already going very slow
+                    if last_valid_speed <= 3:
+                        curr_speed = 0
+                    else:
+                        # Dropped a frame at high speed, reuse previous frame
+                        curr_speed = last_valid_speed
+                # -------------------------------------
 
                 # 3. Handle AWS universally
                 if aws_active:
@@ -87,23 +108,77 @@ def main():
                         controller.release_spad()
                         time.sleep(0.5)
                     else:
-                        # --- NORMAL DRIVING LOGIC ---
+                        # --- NORMAL DRIVING & STATION LOGIC ---
                         effective_limit, pilot_state = pilot.update(
                             curr_speed, limit_speed, signal_state, signal_distance, panel_data
                         )
 
-                        # Execute Cruise Control with dynamic braking curve
-                        controller.cruise_control(dial_target_speed, effective_limit)
+                        ui_dist = panel_data.get("distance")
+
+                        if station_state == "DRIVING":
+                            if pilot_state == AutopilotState.STOPPED and curr_speed == 0 and ui_dist == 0.0:
+                                print("\n[Station] Train stopped at platform. Opening doors...")
+                                controller.release_all()
+                                controller.toggle_doors()
+                                station_state = "WAITING_LOADING_START"
+                                door_timer = time.time()
+                            else:
+                                controller.cruise_control(dial_target_speed, effective_limit)
+
+                        elif station_state == "WAITING_LOADING_START":
+                            if is_loading:
+                                print("[Station] Loading passengers...")
+                                station_state = "LOADING"
+                            elif time.time() - door_timer > 3.0:
+                                print("[Station] Retrying doors...")
+                                controller.toggle_doors()
+                                door_timer = time.time()
+
+                        elif station_state == "LOADING":
+                            if not is_loading:
+                                time.sleep(0.5)
+                                print("[Station] Loading finished! Checking for terminus...")
+                                # --- INSTEAD OF CLOSING DOORS, ENTER TERMINUS CHECK ---
+                                station_state = "CHECKING_TERMINUS"
+                                terminus_timer = time.time()
+
+                        elif station_state == "CHECKING_TERMINUS":
+                            # We give the game 2 seconds to spawn the popup
+                            if next_leg_pos is not None:
+                                print("[Station] Terminus popup detected! Clicking 'Next Leg'...")
+
+                                # Convert the local coordinates inside the ROI to global screen coordinates
+                                global_x = next_leg_pos[0] + config.ROIS["center_popup"]["left"]
+                                global_y = next_leg_pos[1] + config.ROIS["center_popup"]["top"]
+
+                                controller.click_screen(global_x, global_y)
+
+                                # Loop back to wait for the second loading phase to begin
+                                station_state = "WAITING_LOADING_START"
+                                door_timer = time.time()
+
+                            elif time.time() - terminus_timer > 2.0:
+                                # 2 seconds passed and no blue button appeared. It's safe to close doors.
+                                print("[Station] Closing doors...")
+                                controller.toggle_doors()
+                                station_state = "WAITING_DEPARTURE"
+
+                        elif station_state == "WAITING_DEPARTURE":
+                            if ui_dist is not None and ui_dist > 0.0:
+                                print("[Station] Departure cleared. Resuming journey...\n")
+                                station_state = "DRIVING"
 
                         fps = 1.0 / (time.time() - start_time)
+                        # Updated print to show station state
                         print(
-                            f"FPS: {fps:.1f} | State: {pilot_state} | Sig: {signal_state} | Tgt: {dial_target_speed} | Eff: {effective_limit}")
+                            f"FPS: {fps:.1f} | State: {pilot_state} ({station_state}) | Tgt: {dial_target_speed} | Eff: {effective_limit}")
 
                 # Show debug windows
                 cv2.imshow("Signal Distance OCR", sig_thresh)
                 cv2.imshow("Signal ROI Debug", img_signal)
                 cv2.imshow("Info Panel Debug", info_thresh)
                 cv2.imshow("Speed Debug", np.vstack((thresh_c, thresh_l)))
+                cv2.imshow("Door Banner Mask", cv2.cvtColor(img_door_banner, cv2.COLOR_BGRA2BGR))
 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break

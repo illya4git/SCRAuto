@@ -40,7 +40,7 @@ class AutopilotLogic:
                 data = json.load(f)
                 # Ensure we have a positive integer for the math
                 raw_decel = abs(data.get("deceleration_rate_mph_s", 1.5))
-                self.decel_rate = raw_decel * 0.7
+                self.decel_rate = raw_decel * 0.8
                 self.station_offsets = data.get("station_offsets", {})
                 print(f"[Autopilot] Loaded profile for {self.train_model}. Deceleration: {self.decel_rate} mph/s")
         else:
@@ -80,19 +80,24 @@ class AutopilotLogic:
         dist_to_station = None
 
         if ui_dist is not None:
-            if ui_dist == 0.0 and curr_speed is not None and curr_speed > 0:
-                # We entered the platform bounds. Begin Dead Reckoning.
-                if not self.is_tracking_platform:
-                    self.is_tracking_platform = True
-                    self.platform_distance_traveled = 0.0
-                    self.last_reckoning_speed = curr_speed
-                else:
-                    # Use average speed between this frame and last frame for better accuracy
-                    avg_speed = (curr_speed + self.last_reckoning_speed) / 2.0
-                    self.platform_distance_traveled += (avg_speed / 3600.0) * dt
-                    self.last_reckoning_speed = curr_speed
+            if ui_dist == 0.0:
+                if curr_speed is not None and curr_speed > 0:
+                    # We entered the platform bounds. Begin Dead Reckoning.
+                    if not self.is_tracking_platform:
+                        self.is_tracking_platform = True
+                        self.platform_distance_traveled = 0.0
+                        self.last_reckoning_speed = curr_speed
+                    else:
+                        # Use average speed between this frame and last frame for better accuracy
+                        avg_speed = (curr_speed + self.last_reckoning_speed) / 2.0
+                        self.platform_distance_traveled += (avg_speed / 3600.0) * dt
+                        self.last_reckoning_speed = curr_speed
 
-                dist_to_station = max(0.0, (offset - 0.015) - self.platform_distance_traveled)
+                    dist_to_station = max(0.0, (offset - 0.004) - self.platform_distance_traveled)
+                else:
+                    # THE FIX: Train is fully stopped (curr_speed == 0) or OCR dropped a frame.
+                    # Lock the distance to 0 so the speed limit stays firmly at 0 MPH!
+                    dist_to_station = 0.0
 
             elif ui_dist > 0:
                 # We are approaching the station. Distance = UI Distance + the platform offset.

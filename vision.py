@@ -75,24 +75,39 @@ class VisionExtractor:
         curr_img = img_speed[0:h // 2, :]
         limit_img = img_speed[h // 2:h, :]
 
+        # --- STRATEGY 1: Horizontal Stretch ---
+        # Stretching width (fx=4.5) more than height (fy=3) flattens the steep '7'
+        # and makes the top bar obvious, preventing it from being read as a '1' or ignored.
+
         # Process Current Speed (White text)
-        curr_img = cv2.resize(curr_img, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        curr_img = cv2.resize(curr_img, None, fx=4.5, fy=3, interpolation=cv2.INTER_CUBIC)
         gray_c = cv2.cvtColor(curr_img, cv2.COLOR_BGRA2GRAY)
-        _, thresh_c = cv2.threshold(gray_c, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        blur_c = cv2.GaussianBlur(gray_c, (3, 3), 0)
+        _, thresh_c = cv2.threshold(blur_c, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         thresh_c = self.clean_tesseract_image(thresh_c)
-        thresh_c = cv2.copyMakeBorder(thresh_c, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=[255, 255, 255])
 
         # Process Limit Speed (Black text)
-        limit_img = cv2.resize(limit_img, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        limit_img = cv2.resize(limit_img, None, fx=4.5, fy=3, interpolation=cv2.INTER_CUBIC)
         gray_l = cv2.cvtColor(limit_img, cv2.COLOR_BGRA2GRAY)
-        _, thresh_l = cv2.threshold(gray_l, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        blur_l = cv2.GaussianBlur(gray_l, (3, 3), 0)
+        _, thresh_l = cv2.threshold(blur_l, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         thresh_l = self.clean_tesseract_image(thresh_l)
+
+        # --- STRATEGY 2: Text Thinning ---
+        # The text is black (0) and background is white (255).
+        # Dilating expands the white pixels, effectively thinning the bold black text.
+        kernel = np.ones((2, 2), np.uint8)
+        thresh_c = cv2.dilate(thresh_c, kernel, iterations=1)
+        thresh_l = cv2.dilate(thresh_l, kernel, iterations=1)
+
+        thresh_c = cv2.copyMakeBorder(thresh_c, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=[255, 255, 255])
         thresh_l = cv2.copyMakeBorder(thresh_l, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=[255, 255, 255])
 
-        curr_speed_str = pytesseract.image_to_string(thresh_c,
-                                                     config='--psm 7 -c tessedit_char_whitelist=0123456789').strip()
-        limit_speed_str = pytesseract.image_to_string(thresh_l,
-                                                      config='--psm 7 -c tessedit_char_whitelist=0123456789').strip()
+        # Revert to PSM 7 (Single Line) now that the shape is fixed, and force OEM 3 (LSTM)
+        ocr_config = '--psm 7 --oem 3 -c tessedit_char_whitelist=0123456789'
+
+        curr_speed_str = pytesseract.image_to_string(thresh_c, config=ocr_config).strip()
+        limit_speed_str = pytesseract.image_to_string(thresh_l, config=ocr_config).strip()
 
         curr_speed = int(curr_speed_str) if curr_speed_str.isdigit() else None
         limit_speed = int(limit_speed_str) if limit_speed_str.isdigit() else None
@@ -179,6 +194,15 @@ class VisionExtractor:
                 return True
         return False
 
+    def is_loading_active(self, banner_img):
+        """Checks if the purple 'Loading in progress...' banner is present."""
+        bgr = cv2.cvtColor(banner_img, cv2.COLOR_BGRA2BGR)
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, np.array(config.PURPLE_LOWER), np.array(config.PURPLE_UPPER))
+
+        # If there's a solid chunk of purple pixels, the loading phase is active
+        return cv2.countNonZero(mask) > 500
+
     def extract_signal_state(self, signal_img):
         """
         Analyzes the signal UI block and returns the current signal state:
@@ -249,3 +273,22 @@ class VisionExtractor:
                 return None, thresh
 
         return None, thresh
+
+    def find_next_leg_button(self, popup_img):
+        """Finds the 'Next Leg' button and returns its local (X, Y) coordinates."""
+        bgr = cv2.cvtColor(popup_img, cv2.COLOR_BGRA2BGR)
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, np.array(config.NEXT_LEG_BLUE_LOWER), np.array(config.NEXT_LEG_BLUE_UPPER))
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if contours:
+            c = max(contours, key=cv2.contourArea)
+            # A threshold of 2000 ensures we don't click on tiny blue artifacts
+            if cv2.contourArea(c) > 2000:
+                M = cv2.moments(c)
+                if M["m00"] != 0:
+                    cX = int(M["m10"] / M["m00"])
+                    cY = int(M["m01"] / M["m00"])
+                    return cX, cY
+        return None
