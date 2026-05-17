@@ -65,8 +65,8 @@ class AutopilotLogic:
         # --- 1. Signal Logic ---
         dist_to_signal = None
         if signal_state == "danger" and signal_distance is not None:
-            # Add a 0.01 mile safety margin to prevent SPADs (Signal Passed At Danger)
-            dist_to_signal = max(0.0, signal_distance - 0.01)
+            # INCREASED MARGIN: Stop 0.04 miles (~210 feet) before the signal
+            dist_to_signal = max(0.0, signal_distance - 0.04)
 
         # --- 2. Station Logic & Dead Reckoning ---
         ui_dist = panel_data.get("distance")
@@ -92,7 +92,7 @@ class AutopilotLogic:
                     self.platform_distance_traveled += (avg_speed / 3600.0) * dt
                     self.last_reckoning_speed = curr_speed
 
-                dist_to_station = max(0.0, (offset - 0.005) - self.platform_distance_traveled)
+                dist_to_station = max(0.0, (offset - 0.015) - self.platform_distance_traveled)
 
             elif ui_dist > 0:
                 # We are approaching the station. Distance = UI Distance + the platform offset.
@@ -104,10 +104,19 @@ class AutopilotLogic:
         signal_limit = self.calculate_braking_speed(dist_to_signal) if dist_to_signal is not None else float('inf')
         station_limit = self.calculate_braking_speed(dist_to_station) if dist_to_station is not None else float('inf')
 
+        # NEW: Enforce a 15 MPH approach speed when within 0.15 miles of a RED signal
+        if dist_to_signal is not None and dist_to_signal <= 0.15:
+            signal_limit = min(signal_limit, 15)
+
         # NEW: Enforce a 15 MPH approach speed when within 0.15 miles of the station
-        if dist_to_station is not None and dist_to_station <= 0.15:
-            # Ensure we don't speed UP if the braking curve says we should be going slower than 15
-            station_limit = min(station_limit, 15)
+        if dist_to_station is not None:
+            if dist_to_station <= 0.15:
+                # Approach speed constraint
+                station_limit = min(station_limit, 15)
+
+                # THE KILL SWITCH: If we are extremely close, force the target to 0 immediately
+            if dist_to_station <= 0.01:
+                station_limit = 0
 
         # Handle intermediate signal states (yellows)
         if signal_state == "caution":

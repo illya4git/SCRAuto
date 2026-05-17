@@ -159,6 +159,26 @@ class VisionExtractor:
                 return True
         return False
 
+    def is_spad_active(self, dial_img):
+        """Checks if the large red SPAD emergency brake circle is present on the dial."""
+        bgr = cv2.cvtColor(dial_img, cv2.COLOR_BGRA2BGR)
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+
+        # Reuse the red signal masks from config.py
+        mask_red1 = cv2.inRange(hsv, np.array(config.RED_LOWER_1), np.array(config.RED_UPPER_1))
+        mask_red2 = cv2.inRange(hsv, np.array(config.RED_LOWER_2), np.array(config.RED_UPPER_2))
+        mask_red = cv2.bitwise_or(mask_red1, mask_red2)
+
+        contours, _ = cv2.findContours(mask_red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if contours:
+            c = max(contours, key=cv2.contourArea)
+            # The SPAD circle is huge. A threshold of 10000 ensures we don't
+            # accidentally trigger on tiny red UI elements or artifacts.
+            if cv2.contourArea(c) > 10000:
+                return True
+        return False
+
     def extract_signal_state(self, signal_img):
         """
         Analyzes the signal UI block and returns the current signal state:

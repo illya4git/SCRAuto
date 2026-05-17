@@ -71,3 +71,9 @@ class TrainController:
         """Presses Q to accept the AWS warning."""
         pydirectinput.press('q')
         time.sleep(0.05)
+
+    def release_spad(self):
+        """Presses Q to release the SPAD emergency brake."""
+        pydirectinput.press('q')
+        # A small sleep ensures we don't spam the key too fast in the main loop
+        time.sleep(0.1)

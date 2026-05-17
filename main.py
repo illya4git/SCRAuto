@@ -58,7 +58,9 @@ def main():
                 dial_target_speed = vision.extract_dial_speed(img_dial)
                 signal_state = vision.extract_signal_state(img_signal)
                 signal_distance, sig_thresh = vision.extract_signal_distance(img_signal)
+
                 aws_active = vision.is_aws_active(img_dial)
+                spad_active = vision.is_spad_active(img_dial)
 
                 # 3. Handle AWS universally
                 if aws_active:
@@ -73,17 +75,29 @@ def main():
                         f"FPS: {fps:.1f} | Calibrating... | Speed: {curr_speed} | Station: {panel_data.get('next_stop')}")
 
                 else:
-                    # --- AUTOPILOT MODE ---
-                    effective_limit, pilot_state = pilot.update(
-                        curr_speed, limit_speed, signal_state, signal_distance, panel_data
-                    )
+                    if spad_active:
+                        # --- SPAD RECOVERY LOGIC ---
+                        controller.release_all()  # Drop the throttle/brakes immediately
+                        fps = 1.0 / (time.time() - start_time)
+                        print(f"FPS: {fps:.1f} | State: SPAD_RECOVERY | Brute-forcing Q release...")
 
-                    # Execute Cruise Control with dynamic braking curve
-                    controller.cruise_control(dial_target_speed, effective_limit)
+                        # Simply press Q.
+                        # We use a 0.5s sleep so we aren't spamming the key 30 times a second,
+                        # but we hit it often enough to catch the exact moment the timer expires.
+                        controller.release_spad()
+                        time.sleep(0.5)
+                    else:
+                        # --- NORMAL DRIVING LOGIC ---
+                        effective_limit, pilot_state = pilot.update(
+                            curr_speed, limit_speed, signal_state, signal_distance, panel_data
+                        )
 
-                    fps = 1.0 / (time.time() - start_time)
-                    print(
-                        f"FPS: {fps:.1f} | State: {pilot_state} | Sig: {signal_state} | Tgt: {dial_target_speed} | Eff: {effective_limit}")
+                        # Execute Cruise Control with dynamic braking curve
+                        controller.cruise_control(dial_target_speed, effective_limit)
+
+                        fps = 1.0 / (time.time() - start_time)
+                        print(
+                            f"FPS: {fps:.1f} | State: {pilot_state} | Sig: {signal_state} | Tgt: {dial_target_speed} | Eff: {effective_limit}")
 
                 # Show debug windows
                 cv2.imshow("Signal Distance OCR", sig_thresh)
