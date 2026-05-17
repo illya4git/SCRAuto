@@ -7,9 +7,28 @@ TESSERACT_CMD = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 # Regions of Interest (ROIs)
 ROIS = {
     "info_panel": {"top": 1200, "left": 15, "width": 300, "height": 160},
+    "signal": {"top": 1180, "left": 325, "width": 100, "height": 180},
     "digital_speed": {"top": 1200, "left": 2045, "width": 70, "height": 160},
     "dial": {"top": 1010, "left": 2190, "width": 464, "height": 464}
 }
+
+# --- Signal & Dial Color Masks (HSV) ---
+
+# Red wraps around the HSV spectrum, so we often define two ranges or a wide one.
+RED_LOWER_1 = [0, 120, 120]
+RED_UPPER_1 = [10, 255, 255]
+RED_LOWER_2 = [160, 120, 120]
+RED_UPPER_2 = [180, 255, 255]
+
+YELLOW_LOWER = [20, 120, 120]
+YELLOW_UPPER = [35, 255, 255]
+
+GREEN_LOWER = [45, 180, 180]
+GREEN_UPPER = [75, 255, 255]
+
+# White has very low saturation and high value
+WHITE_LOWER = [0, 0, 200]
+WHITE_UPPER = [180, 30, 255]
 
 # Dial Calibration (Speed in MPH, Angle in Degrees)
 DIAL_CALIBRATION_POINTS = [
@@ -19,9 +38,11 @@ DIAL_CALIBRATION_POINTS = [
     (90, 257.3),
 ]
 
-# HSV Color range for the green dial indicator
+# HSV Color range for the green dial indicator and orange AWS circle
 GREEN_LOWER = [40, 100, 100]
 GREEN_UPPER = [80, 255, 255]
+AWS_LOWER = [15, 150, 150]
+AWS_UPPER = [30, 255, 255]
 
 # Pre-compiled Regex patterns for optimization
 PATTERNS = {

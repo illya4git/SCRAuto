@@ -47,3 +47,9 @@ class TrainController:
             pydirectinput.keyUp('w')
             pydirectinput.keyUp('s')
             self.current_key = None
+
+    def acknowledge_aws(self):
+        """Presses Q to accept the AWS warning."""
+        pydirectinput.press('q')
+        # Tiny sleep to ensure the game engine registers the keystroke
+        time.sleep(0.05)
