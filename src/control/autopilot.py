@@ -4,13 +4,7 @@ import math
 import json
 import os
 import re
-
-
-class AutopilotState:
-    CRUISING = "CRUISING"
-    BRAKING_SIGNAL = "BRAKING_SIGNAL"
-    BRAKING_STATION = "BRAKING_STATION"
-    STOPPED = "STOPPED"
+from src.core.states import AutopilotState
 
 
 class AutopilotLogic:
@@ -20,13 +14,16 @@ class AutopilotLogic:
 
         # Formatting filename to match the calibrator
         safe_name = re.sub(r'[^a-zA-Z0-9]', '_', train_model)
-        self.calib_file = f"calibration_{safe_name}.json"
+        self.calib_file = os.path.join("data", f"calibration_{safe_name}.json")
 
         # Default physical fallbacks if not calibrated
         self.decel_rate = 1.5
         self.station_offsets = {}
 
         self._load_calibration()
+
+        # Tuning parameter: Seconds to hold the key per 1 MPH difference.
+        self.hold_time_per_mph = 0.015
 
         # Dead Reckoning State Variables
         self.last_time = time.time()
@@ -45,6 +42,33 @@ class AutopilotLogic:
                 print(f"[Autopilot] Loaded profile for {self.train_model}. Deceleration: {self.decel_rate} mph/s")
         else:
             print(f"[Autopilot] WARNING: No calibration found for {self.train_model}. Using default physics.")
+
+    def calculate_throttle_action(self, current_dial, target_limit):
+        """
+        A Proportional (P) control loop that determines how to adjust the train's speed.
+        Returns a tuple: (action_type, duration_in_seconds)
+        """
+        if current_dial is None or target_limit is None:
+            return "coast", 0.0
+
+        diff = current_dial - target_limit
+
+        # Deadband: If within 2 mph of the target, do nothing
+        if abs(diff) <= 2:
+            return "coast", 0.0
+
+        # Calculate proportional hold time
+        hold_time = abs(diff) * self.hold_time_per_mph
+
+        # Cap the hold time so we don't block the computer vision loop (max 0.4s)
+        hold_time = min(hold_time, 0.4)
+
+        if diff > 0:
+            # Dial is higher than limit -> Need to brake
+            return "brake", hold_time
+        else:
+            # Dial is lower than limit -> Need to accelerate
+            return "throttle", hold_time
 
     def calculate_braking_speed(self, distance_miles):
         """Calculates the maximum safe speed for a given distance to target."""

@@ -10,7 +10,7 @@ class TrainCalibrator:
         self.train_model = train_model_name
         # Sanitize filename (e.g., "Class 357" -> "calibration_Class_357.json")
         safe_name = re.sub(r'[^a-zA-Z0-9]', '_', train_model_name)
-        self.filename = f"calibration_{safe_name}.json"
+        self.filename = os.path.join("data", f"calibration_{safe_name}.json")
 
         self.data = self._load_data()
 
